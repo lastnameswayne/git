@@ -37,6 +37,7 @@ def cmd_init(args):
 
     repo_create(args.path)
 
+def repo_find()
 
 def repo_create(path):
     git_repo = GitRepository(path, True)
@@ -145,3 +146,23 @@ def repo_dir(repo, *path, mkdir=False):
     else:
         return None
 
+
+
+def repo_find(path=".", required=True):
+    path = os.path.realpath(path)
+
+
+    gitpath = os.path.join(path, ".git")
+    if os.path.isdir(gitpath):
+        return GitRepository(gitpath)
+    
+    
+    parent = os.path.realpath(os.path.join(path, ".."))
+    if parent == path:
+        if required:
+            raise Exception("no repo found")
+
+        else:
+            return None
+
+    return repo_find(parent, required)
