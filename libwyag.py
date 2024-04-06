@@ -27,17 +27,85 @@ def main(argv=sys.argv[1:]):
 
 
 
+    argsp = argsubparsers.add_parser("cat-file",
+                                 help="Provide content of repository objects")
+
+    argsp.add_argument("type",
+                   metavar="type",
+                   choices=["blob", "commit", "tag", "tree"],
+                   help="Specify the type")
+
+    argsp.add_argument("object",
+                   metavar="object",
+                   help="The object to display")
+
+    argsp = argsubparsers.add_parser(
+    "hash-object",
+    help="Compute object ID and optionally creates a blob from a file")
+
+    argsp.add_argument("-t",
+                   metavar="type",
+                   dest="type",
+                   choices=["blob", "commit", "tag", "tree"],
+                   default="blob",
+                   help="Specify the type")
+
+    argsp.add_argument("-w",
+                   dest="write",
+                   action="store_true",
+                   help="Actually write the object into the database")
+
+    argsp.add_argument("path",
+                   help="Read object from <file>")
+
+
     args = argparser.parse_args(argv)
     match args.command:
         case "init"         : cmd_init(args)
+        case "cat-file"      : cmd_cat_file(args)
+        case "hash-object": cmd_hash_object(args)
         case _              : print("Bad command.")
 
+def cmd_hash_object(args):
+    if args.write:
+        repo = repo_find()
+    else:
+        repo = None
+
+    with open(args.path, "rb") as fd:
+        sha = object_hash(fd, args.type.encode(), repo)
+        print(sha)
+
+def object_hash(fd, fmt, repo=None):
+    data = fd.read()
+
+    match fmt:
+        # case b'commit' : obj=GitCommit(data)
+        # case b'tree'   : obj=GitTree(data)
+        # case b'tag'    : obj=GitTag(data)
+        case b'blob'   : obj=GitBlob(data)
+        case _: raise Exception("Unknown type %s!" % fmt)
+
+    return object_write(obj, repo)
+
+
+
+
+def cmd_cat_file(args):
+    repo = repo_find()
+    cat_file(repo, args.object, fmt=args.type.encode())
+
+
+def cat_file(repo, object, fmt):
+    obj = object_read(repo, object_find(repo, object, fmt=fmt))
+    sys.stdout.buffer.write(obj.serialize())
+
+def object_find(repo, name, fmt=None, follow=True):
+    return name
 
 def cmd_init(args):
 
     repo_create(args.path)
-
-def repo_find()
 
 def repo_create(path):
     git_repo = GitRepository(path, True)
@@ -58,8 +126,6 @@ def repo_create(path):
     assert repo_dir(git_repo, "refs", "heads", mkdir=True)
 
 
-
-    
     with open(repo_file(git_repo, "description"), "w") as f:
         f.write("edit this file to name the repository")
 
@@ -116,9 +182,7 @@ class GitRepository (object):
             repoFormatVersion = self.conf.get("core", "repositoryformatversion")
             if repoFormatVersion != 0:
                 raise Exception("unsupported opreration")
-
-
-
+    
 
 def repo_path(repo, *path):
     return os.path.join(repo.git_directory, *path)
@@ -154,7 +218,7 @@ def repo_find(path=".", required=True):
 
     gitpath = os.path.join(path, ".git")
     if os.path.isdir(gitpath):
-        return GitRepository(gitpath)
+        return GitRepository(path, True)
     
     
     parent = os.path.realpath(os.path.join(path, ".."))
@@ -166,3 +230,94 @@ def repo_find(path=".", required=True):
             return None
 
     return repo_find(parent, required)
+
+
+class GitObject(object):
+    def __init__(self, data=None):
+        if data != None:
+            self.deserialize(data)
+        else:
+            self.init() 
+    
+    def serialize(self, repo):
+        raise Exception("unimplemented")
+
+    def deserialize(self, data):
+        raise Exception("unimplemented")
+    
+    def init(self):
+        pass
+
+
+def calculate_path_from_hash(repo, hash):
+    return repo_file(repo, "objects", hash[0:2], hash[2:], mkdir=True)
+
+
+def object_read(repo, sha):
+    path = calculate_path_from_hash(repo, sha)
+
+    if not os.path.isfile(path):
+        return None
+
+    with open (path, "rb") as f:
+        decompressed = zlib.decompress(f.read())
+
+        #An object starts with a header that specifies its type:
+            #1. blob, commit, tag or tree. 
+            #2. This header is followed by an ASCII space (0x20), 
+            #3. then the size of the object in bytes as an ASCII number, 
+            #4. then null (0x00) (the null byte), then the contents of the object
+
+        x = decompressed.find(b' ')  #find the ASCII space and read everything before that as the type
+        object_type = decompressed[0:x]
+
+        
+        #find the ASCII null and everyhting before that and after the space is the size of the object in bytes as an ASCII number
+        y = decompressed.find(b'\x00', x) 
+        size = int(decompressed[x:y].decode("ascii"))
+        if size != len(decompressed)-y-1: #y-1 is the size of the header, so we subtract that from the total = left with object size
+            raise Exception("Malformed object {0}: bad length".format(sha))
+
+
+        match object_type:
+            # case b'commit': c=GitCommit
+            # case b'tree':
+            # case b'tag':
+            case b'blob': c=GitBlob
+            case _:
+                raise Exception("unknown type")
+        
+    
+        #[y+1:] is the object data, as [y+1] is the header. I might be off by 1
+        return c(decompressed[y+1:])
+
+
+def object_write(obj, repo=None):
+    data = obj.serialize()
+
+#add header
+    result = obj.fmt + b' ' + str(len(data)).encode() + b'\x00' + data
+
+    sha = hashlib.sha1(result).hexdigest()
+
+    if repo:
+        path = calculate_path_from_hash(repo, sha)
+        if not os.path.exists(path):
+            with open(path, 'wb') as f:
+                f.write(zlib.compress(result))
+
+    return sha
+
+
+
+
+class GitBlob(GitObject):
+    fmt=b'blob'
+
+    def serialize(self):
+        return self.blobdata
+
+    def deserialize(self, data):
+        self.blobdata=data
+
+
