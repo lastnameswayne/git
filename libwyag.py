@@ -320,4 +320,67 @@ class GitBlob(GitObject):
     def deserialize(self, data):
         self.blobdata=data
 
+class GitCommit(GitObject):
+    fmt=b'commit'
+    
+    def serialize(self):
+        return kvlm_serialize(self.kvlm)
+    
+    def deserialize(self, data):
+        self.kvlm = kvlm_parse(data)
+    
+    def init(self):
+        self.kvlm = dict()
+
+        
+         
+
+def kvlm_parse(raw, start=0, dct=None):
+    if not dct:
+        dct= collections.OrderedDict()
+    
+   
+    space = raw.find(b' ', start)
+    end = raw[start:].find(b'\n', start)
+
+    noSpace = space == -1
+    if noSpace or end < space:
+        dct["message"] = raw[start+1:]  #the message
+
+    key = raw[start:space]
+
+    #the value may stretch over multiple lines
+    end = start
+    while True:
+        end = raw.find(b'\n', end+1)
+        char_after_nl_is_not_space = raw[end+1] != ord(' ')
+        if char_after_nl_is_not_space: break
+
+    val = raw[space+1:end].replace(b'\n ', b'\n')
+    if key in dct:
+        if type(dct[key]) == list:
+            dct[key].append(val)
+        else:
+            dct[key] = [ dct[key], val ]
+    else:
+        dct[key]=[val]
+
+    return kvlm_parse(raw[val+1:], start=end+1, dct=dct)
+
+
+def kvlm_serialize(kvlm):
+    msg = b''
+
+    for k in kvlm.keys():
+        if k==None: continue
+        val = kvlm[k]
+
+
+        for v in val:
+            msg+= k + b' ' + (v.replace(b'\n', 'b\n ')) + b'\n'
+
+
+    msg += b'\n' + kvlm["message"] + b'\n' 
+        
+    return msg
 
