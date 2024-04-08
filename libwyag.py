@@ -59,12 +59,26 @@ def main(argv=sys.argv[1:]):
                    help="Read object from <file>")
 
 
+    argsp = argsubparsers.add_parser("log", help="Display history of a given commit.")
+    argsp.add_argument("commit",
+                   default="HEAD",
+                   nargs="?",
+                   help="Commit to start at.")
     args = argparser.parse_args(argv)
     match args.command:
         case "init"         : cmd_init(args)
         case "cat-file"      : cmd_cat_file(args)
         case "hash-object": cmd_hash_object(args)
+        case "log": cmd_log(args)
         case _              : print("Bad command.")
+
+def cmd_log(args):
+    repo = repo_find()
+
+    print("digraph wyaglog{")
+    print("  node[shape=rect]")
+    visualize_commits(repo, object_find(repo, args.commit), set())
+    print("}")
 
 def cmd_hash_object(args):
     if args.write:
@@ -80,16 +94,13 @@ def object_hash(fd, fmt, repo=None):
     data = fd.read()
 
     match fmt:
-        # case b'commit' : obj=GitCommit(data)
+        case b'commit' : obj=GitCommit(data)
         # case b'tree'   : obj=GitTree(data)
         # case b'tag'    : obj=GitTag(data)
         case b'blob'   : obj=GitBlob(data)
         case _: raise Exception("Unknown type %s!" % fmt)
 
     return object_write(obj, repo)
-
-
-
 
 def cmd_cat_file(args):
     repo = repo_find()
@@ -106,6 +117,38 @@ def object_find(repo, name, fmt=None, follow=True):
 def cmd_init(args):
 
     repo_create(args.path)
+
+
+def visualize_commits(repo, commit_sha, seen):
+
+    if commit_sha in seen:
+        return
+    seen.add(commit_sha)
+
+    commit = object_read(repo, commit_sha)
+    message = commit.kvlm["message"].decode("utf8").strip()
+    message = message.replace("\\", "\\\\")
+    message = message.replace("\"", "\\\"")
+
+    if "\n" in message: # Keep only the first line
+        message = message[:message.index("\n")]
+
+    print("  c_{0} [label=\"{1}: {2}\"]".format(commit_sha, commit_sha[0:7], message))
+    assert commit.fmt==b'commit'
+
+    if not b'parent' in commit.kvlm.keys():
+        # Base case: the initial commit.
+        return
+
+    parents = commit.kvlm[b'parent']
+
+    if type(parents) != list:
+        parents = [ parents ]
+
+    for p in parents:
+        p = p.decode("ascii")
+        print ("  c_{0} -> c_{1};".format(commit_sha, p))
+        visualize_commits(repo, p, seen)
 
 def repo_create(path):
     git_repo = GitRepository(path, True)
@@ -280,7 +323,7 @@ def object_read(repo, sha):
 
 
         match object_type:
-            # case b'commit': c=GitCommit
+            case b'commit': c=GitCommit
             # case b'tree':
             # case b'tag':
             case b'blob': c=GitBlob
@@ -341,11 +384,12 @@ def kvlm_parse(raw, start=0, dct=None):
     
    
     space = raw.find(b' ', start)
-    end = raw[start:].find(b'\n', start)
+    newline = raw[start:].find(b'\n', start)
 
     noSpace = space == -1
-    if noSpace or end < space:
+    if noSpace or newline < space:
         dct["message"] = raw[start+1:]  #the message
+        return dct
 
     key = raw[start:space]
 
@@ -365,7 +409,7 @@ def kvlm_parse(raw, start=0, dct=None):
     else:
         dct[key]=[val]
 
-    return kvlm_parse(raw[val+1:], start=end+1, dct=dct)
+    return kvlm_parse(raw, start=end+1, dct=dct)
 
 
 def kvlm_serialize(kvlm):
@@ -383,4 +427,5 @@ def kvlm_serialize(kvlm):
     msg += b'\n' + kvlm["message"] + b'\n' 
         
     return msg
+
 
