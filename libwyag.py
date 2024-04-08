@@ -64,13 +64,57 @@ def main(argv=sys.argv[1:]):
                    default="HEAD",
                    nargs="?",
                    help="Commit to start at.")
+    
+    argsp = argsubparsers.add_parser("ls-tree", help="Pretty-print a tree object.")
+    argsp.add_argument("-r",
+                   dest="recursive",
+                   action="store_true",
+                   help="Recurse into sub-trees")
+
+    argsp.add_argument("tree",
+                   help="A tree-ish object.")
+    
+
+
     args = argparser.parse_args(argv)
     match args.command:
         case "init"         : cmd_init(args)
         case "cat-file"      : cmd_cat_file(args)
         case "hash-object": cmd_hash_object(args)
         case "log": cmd_log(args)
+        case "ls-tree": cmd_ls_tree(args)
         case _              : print("Bad command.")
+
+def cmd_ls_tree(args):
+    repo=repo_find()
+    ls_tree(repo, args.tree, args.recursive)
+
+def ls_tree(repo, ref, recursive=None, prefix=""):
+    sha = object_find(repo, ref, fmt=b"tree")
+    obj = object_read(repo, sha) #get the tree from the objects folder
+
+    for item in obj.items:
+        if len(item.mode)==5:
+            type = item.mode[0:1]
+        else:
+            type = item.mode[0:2]
+        
+        match type: #this is per definition of the tree content https://wyag.thb.lt/#checkout
+            case b'04': type = "tree"
+            case b'10': type = "blob" # A regular file.
+            case b'12': type = "blob" # A symlink. Blob contents is link target.
+            case b'16': type = "commit" # A submodule
+            case _: raise Exception("Weird tree leaf mode {}".format(item.mode))
+
+        if type != 'tree' or not recursive: #this is a leaf, print it
+            zero_padding = "0" * (6 - len(item.mode)) + item.mode.decode("ascii"),
+            print("{0} {1} {2}\t{3}".format(
+                zero_padding,
+                type,
+                item.sha,
+                os.path.join(prefix, item.path)))
+        else: 
+            ls_tree(repo, item.sha, recursive, os.path.join(prefix, item.path))
 
 def cmd_log(args):
     repo = repo_find()
@@ -95,7 +139,7 @@ def object_hash(fd, fmt, repo=None):
 
     match fmt:
         case b'commit' : obj=GitCommit(data)
-        # case b'tree'   : obj=GitTree(data)
+        case b'tree'   : obj=GitTree(data)
         # case b'tag'    : obj=GitTag(data)
         case b'blob'   : obj=GitBlob(data)
         case _: raise Exception("Unknown type %s!" % fmt)
@@ -115,12 +159,10 @@ def object_find(repo, name, fmt=None, follow=True):
     return name
 
 def cmd_init(args):
-
     repo_create(args.path)
 
 
 def visualize_commits(repo, commit_sha, seen):
-
     if commit_sha in seen:
         return
     seen.add(commit_sha)
@@ -324,7 +366,7 @@ def object_read(repo, sha):
 
         match object_type:
             case b'commit': c=GitCommit
-            # case b'tree':
+            case b'tree': c=GitTree
             # case b'tag':
             case b'blob': c=GitBlob
             case _:
@@ -429,3 +471,71 @@ def kvlm_serialize(kvlm):
     return msg
 
 
+class GitTreeLeaf(object):
+    def __int__(self, mode, path, sha):
+        self.mode=mode
+        self.path= path 
+        self.sha = sha
+
+
+class GitTree(GitObject):
+    blob = b'tree'
+
+    def deserialize(self,data):
+        self.items = tree_parse(data)
+    
+    def serialize(self):
+        tree_serialize(self)
+    
+    def init(self):
+        self.items = list()
+
+
+def tree_parse_one(raw, start=0):
+    mode_end = raw.find(b' ', start)
+
+    mode=raw[start, mode_end]
+    if len(mode) == 5:
+        # Normalize to six bytes.
+        mode = b" " + mode
+
+    path_end = raw.find(b'0x00', mode_end)
+
+    path=raw[mode_end+1, path_end]
+
+    #SHA-1 in binary encoding, on 20 bytes. converts to hexadeicmal
+    sha = format(int.from_bytes(raw[path_end+1:path_end+21], "big"), "040x")
+
+    return path_end+21, GitTreeLeaf(mode, path.decode("utf8"), sha) 
+
+
+
+def tree_parse(raw):
+    i= 0
+    out = list()
+    while(i<len(raw)):
+        end, leaf = tree_parse(raw, i) 
+        i=end
+        out.append(leaf)
+
+    return out
+
+
+def tree_serialize(tree):
+    sorted = tree.items.sort(key=tree_leaf_sort_key)
+
+    out = b''
+    for elem in sorted.items:
+        out+=elem.mode+b' '+elem.path.encode("utf8")+b'\x00'
+        sha = int(elem.sha, 16)
+        out+=sha.to_bytes(20,byteorder="big")
+
+    return out
+
+        
+
+def tree_leaf_sort_key(leaf):
+    if leaf.mode.startswith(b"10"):
+        return leaf.path
+    else:
+        return leaf.path + "/"
