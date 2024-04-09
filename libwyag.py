@@ -75,6 +75,14 @@ def main(argv=sys.argv[1:]):
                    help="A tree-ish object.")
     
 
+    argsp = argsubparsers.add_parser("checkout", help="Checkout a commit inside of a directory.")
+
+    argsp.add_argument("commit",
+                   help="The commit or tree to checkout.")
+
+    argsp.add_argument("path",
+                   help="The EMPTY directory to checkout on.")
+
 
     args = argparser.parse_args(argv)
     match args.command:
@@ -83,7 +91,40 @@ def main(argv=sys.argv[1:]):
         case "hash-object": cmd_hash_object(args)
         case "log": cmd_log(args)
         case "ls-tree": cmd_ls_tree(args)
+        case "checkout": cmd_checkout(args)
         case _              : print("Bad command.")
+
+def cmd_checkout(args):
+    repo = repo_find()
+    obj = object_read(repo, object_find(repo, args.commit))
+
+    if obj.fmt == b'commit':
+        obj = object_read(repo, obj.kvlm[b'tree'][0].decode("ascii"))
+    
+    if os.path.exists(args.path):
+        if not os.path.isdir(args.path):
+            raise Exception(f"Not a directory {args.path}")
+        if os.listdir(args.path):
+            raise Exception(f"Not empty", args.path)
+    
+    else:
+        os.makedirs(args.path)
+
+
+    tree_checkout(repo, obj, os.path.realpath(args.path))
+
+def tree_checkout(repo, tree, path):
+    for elem in tree.items:
+        obj = object_read(repo, elem.sha)
+        dest = os.path.join(path, elem.path)
+
+        if obj.fmt == b'tree':
+            os.mkdir(dest)
+            tree_checkout(repo,obj, dest)
+        elif obj.fmt==b'blob':
+            with open(dest, 'wb') as f:
+                f.write(obj.blobdata)
+
 
 def cmd_ls_tree(args):
     repo=repo_find()
@@ -472,14 +513,15 @@ def kvlm_serialize(kvlm):
 
 
 class GitTreeLeaf(object):
-    def __int__(self, mode, path, sha):
+    
+    def __init__(self, mode, path, sha):
         self.mode=mode
         self.path= path 
         self.sha = sha
 
 
 class GitTree(GitObject):
-    blob = b'tree'
+    fmt = b'tree'
 
     def deserialize(self,data):
         self.items = tree_parse(data)
@@ -494,27 +536,27 @@ class GitTree(GitObject):
 def tree_parse_one(raw, start=0):
     mode_end = raw.find(b' ', start)
 
-    mode=raw[start, mode_end]
+    mode=raw[start:mode_end]
     if len(mode) == 5:
         # Normalize to six bytes.
         mode = b" " + mode
 
-    path_end = raw.find(b'0x00', mode_end)
+    path_end = raw.find(b'\x00', mode_end)
 
-    path=raw[mode_end+1, path_end]
+    path=raw[mode_end+1:path_end]
 
     #SHA-1 in binary encoding, on 20 bytes. converts to hexadeicmal
     sha = format(int.from_bytes(raw[path_end+1:path_end+21], "big"), "040x")
-
+    print(path)
     return path_end+21, GitTreeLeaf(mode, path.decode("utf8"), sha) 
 
 
 
 def tree_parse(raw):
-    i= 0
+    i = 0
     out = list()
     while(i<len(raw)):
-        end, leaf = tree_parse(raw, i) 
+        end, leaf = tree_parse_one(raw, i) 
         i=end
         out.append(leaf)
 
@@ -539,3 +581,17 @@ def tree_leaf_sort_key(leaf):
         return leaf.path
     else:
         return leaf.path + "/"
+
+def ref_resolve(repo, ref):
+    path=repo_file(repo, ref)
+
+    if not os.path(path):
+        return None
+
+
+    with open(path, 'r') as fp:
+        data = fp.read()[:-1]
+    if data.startswith("ref: "):
+        return ref_resolve(repo, data[5:])
+    else:
+        return data
