@@ -202,7 +202,7 @@ def object_hash(fd, fmt, repo=None):
     match fmt:
         case b'commit' : obj=GitCommit(data)
         case b'tree'   : obj=GitTree(data)
-        # case b'tag'    : obj=GitTag(data)
+        case b'tag'    : obj=GitTag(data)
         case b'blob'   : obj=GitBlob(data)
         case _: raise Exception("Unknown type %s!" % fmt)
 
@@ -429,7 +429,7 @@ def object_read(repo, sha):
         match object_type:
             case b'commit': c=GitCommit
             case b'tree': c=GitTree
-            # case b'tag':
+            case b'tag': c=GitTag
             case b'blob': c=GitBlob
             case _:
                 raise Exception("unknown type")
@@ -467,6 +467,8 @@ class GitBlob(GitObject):
     def deserialize(self, data):
         self.blobdata=data
 
+
+
 class GitCommit(GitObject):
     fmt=b'commit'
     
@@ -479,7 +481,10 @@ class GitCommit(GitObject):
     def init(self):
         self.kvlm = dict()
 
-        
+
+
+class GitTag(GitCommit):
+    fmt = b'tag'       
          
 
 def kvlm_parse(raw, start=0, dct=None):
