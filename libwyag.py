@@ -85,6 +85,24 @@ def main(argv=sys.argv[1:]):
     
     argsp = argsubparsers.add_parser("show-ref", help="List references.")
 
+    argsp = argsubparsers.add_parser(
+    "tag",
+    help="List and create tags")
+
+    argsp.add_argument("-a",
+                   action="store_true",
+                   dest="create_tag_object",
+                   help="Whether to create a tag object")
+
+    argsp.add_argument("name",
+                   nargs="?",
+                   help="The new tag's name")
+
+    argsp.add_argument("object",
+                   default="HEAD",
+                   nargs="?",
+                   help="The object the new tag will point to")
+
 
     args = argparser.parse_args(argv)
     match args.command:
@@ -95,7 +113,46 @@ def main(argv=sys.argv[1:]):
         case "ls-tree": cmd_ls_tree(args)
         case "checkout": cmd_checkout(args)
         case "show-ref": cmd_show_ref(args)
+        case "tag": cmd_tag(args)
         case _              : print("Bad command.")
+
+
+def cmd_tag(args):
+    repo = repo_find()
+
+    if args.name:
+        tag_create(repo,
+                   args.name,
+                   args.object,
+                   type = "object" if args.create_tag_object else "ref")
+    else:
+        refs = ref_list(repo)
+        show_ref(repo, refs["tags"], with_hash=True)
+
+
+def tag_create(repo, name, ref, create_tag_object = False):
+    sha = object_find(repo, ref)
+    
+    if create_tag_object:
+        tag = GitTag()
+        tag.kvlm = collections.OrderedDict()
+        tag.kvlm[b'object'] = sha.encode()
+        tag.kvlm[b'type'] = b'commit'
+        tag.kvlm[b'tag'] = name.encode()
+        tag.kvlm[b'tagger']= "me"
+        tag.kvlm[None]  = b"Tag test"
+        tag_sha = object_write(tag)
+        ref_create(repo, "tags/"+name, sha)
+
+    else:
+        ref_create(repo, )
+
+    with open(path, 'w+') as f:
+        f.write()
+
+def ref_create(repo, ref_name, sha):
+    with open(repo_file(repo, "refs/" + ref_name), 'w') as fp:
+        fp.write(sha + "\n")
 
 
 def cmd_show_ref(args):
