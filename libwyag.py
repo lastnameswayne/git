@@ -124,13 +124,15 @@ def cmd_tag(args):
         tag_create(repo,
                    args.name,
                    args.object,
-                   type = "object" if args.create_tag_object else "ref")
+                   type="object" if args.create_tag_object else "ref")
     else:
         refs = ref_list(repo)
+        if len(refs["tags"].values()) == 0:
+            print("no tags found") 
         show_ref(repo, refs["tags"], with_hash=True)
 
 
-def tag_create(repo, name, ref, create_tag_object = False):
+def tag_create(repo, name, ref, create_tag_object = False, type = "ref"):
     sha = object_find(repo, ref)
     
     if create_tag_object:
@@ -142,13 +144,10 @@ def tag_create(repo, name, ref, create_tag_object = False):
         tag.kvlm[b'tagger']= "me"
         tag.kvlm[None]  = b"Tag test"
         tag_sha = object_write(tag)
-        ref_create(repo, "tags/"+name, sha)
-
+        ref_create(repo, "tags/"+name, tag_sha)
     else:
-        ref_create(repo, )
-
-    with open(path, 'w+') as f:
-        f.write()
+        print(name, sha)
+        ref_create(repo, "tags/"+name, sha)
 
 def ref_create(repo, ref_name, sha):
     with open(repo_file(repo, "refs/" + ref_name), 'w') as fp:
