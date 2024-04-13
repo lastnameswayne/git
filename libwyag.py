@@ -132,7 +132,7 @@ def cmd_tag(args):
         show_ref(repo, refs["tags"], with_hash=True)
 
 
-def tag_create(repo, name, ref, create_tag_object = False, type = "ref"):
+def tag_create(repo, name, ref, create_tag_object = False, type=""):
     sha = object_find(repo, ref)
     
     if create_tag_object:
@@ -146,7 +146,6 @@ def tag_create(repo, name, ref, create_tag_object = False, type = "ref"):
         tag_sha = object_write(tag)
         ref_create(repo, "tags/"+name, tag_sha)
     else:
-        print(name, sha)
         ref_create(repo, "tags/"+name, sha)
 
 def ref_create(repo, ref_name, sha):
@@ -274,7 +273,34 @@ def cat_file(repo, object, fmt):
     sys.stdout.buffer.write(obj.serialize())
 
 def object_find(repo, name, fmt=None, follow=True):
-    return name
+    sha = object_resolve(repo, name)
+    if not sha:
+        return Exception("no such references")
+
+    if len(sha)>1:
+        raise Exception("more than one candidates, ambitious reference")
+
+
+    sha = sha[0]
+
+    if not fmt:
+        return sha
+
+    
+    while(True):
+        object = object_read(repo, sha)
+        if object.fmt == fmt:
+            return sha
+    
+        if not follow:
+            return None
+    
+        if object.fmt == b'tag':
+            sha = object.kvlm[b'object'].decode("ascii")
+        elif object.fmt == b'commit' and fmt == b'tree':
+            sha = object.kvlm[b'tree'].decode("ascii")
+        else:
+            return None
 
 def cmd_init(args):
     repo_create(args.path)
@@ -693,3 +719,36 @@ def ref_list(repo, path=None):
             ret[f] = ref_resolve(repo, ref_path)
 
     return ret
+
+
+def object_resolve(repo, name):
+    candidates = list()
+    hashRE = re.compile(r"^[0-9A-Fa-f]{4,40}$")
+    if not name.strip():
+        return None
+ 
+    if name == "HEAD":
+        return [ref_resolve(repo, "HEAD")]
+
+    if hashRE.match(name):
+        name = name.lower()
+        prefix = name[0:2]
+        path = repo_dir(repo, "objects", prefix, mkdir=False)
+        if path:
+            rem = name[0:2]
+            for f in os.listdir(path):
+                if f.startswith(rem):
+                    candidates.append(prefix+f)
+
+
+
+    as_tag = ref_resolve(repo, "refs/tags/"+name)
+    if as_tag:
+        candidates.append(as_tag)
+
+    as_branch = ref_resolve(repo, "refs/heads/"+name)
+    if as_branch:
+        candidates.append(as_branch)
+
+
+    return candidates
