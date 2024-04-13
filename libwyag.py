@@ -324,7 +324,7 @@ def object_find(repo, name, fmt=None, follow=True):
         if object.fmt == b'tag':
             sha = object.kvlm[b'object'].decode("ascii")
         elif object.fmt == b'commit' and fmt == b'tree':
-            sha = object.kvlm[b'tree'].decode("ascii")
+            sha = object.kvlm[b'tree'][0].decode("ascii")
         else:
             return None
 
