@@ -504,12 +504,8 @@ class GitObject(object):
         pass
 
 
-def calculate_path_from_hash(repo, hash):
-    return repo_file(repo, "objects", hash[0:2], hash[2:], mkdir=True)
-
-
 def object_read(repo, sha):
-    path = calculate_path_from_hash(repo, sha)
+    path = repo_file(repo, "objects", sha[0:2], sha[2:])
 
     if not os.path.isfile(path):
         return None
@@ -556,7 +552,8 @@ def object_write(obj, repo=None):
     sha = hashlib.sha1(result).hexdigest()
 
     if repo:
-        path = calculate_path_from_hash(repo, sha)
+        path=repo_file(repo, "objects", sha[0:2], sha[2:], mkdir=True)
+
         if not os.path.exists(path):
             with open(path, 'wb') as f:
                 f.write(zlib.compress(result))
@@ -761,7 +758,7 @@ def object_resolve(repo, name):
         prefix = name[0:2]
         path = repo_dir(repo, "objects", prefix, mkdir=False)
         if path:
-            rem = name[0:2]
+            rem = name[2:]
             for f in os.listdir(path):
                 if f.startswith(rem):
                     candidates.append(prefix+f)
@@ -782,5 +779,5 @@ def object_resolve(repo, name):
     for path in [f'refs/heads/{name}', f'refs/tags/{name}', f'refs/{name}', name]:
         if os.path.exists(repo_file(repo, path)):
             candidates.append(ref_resolve(repo, path))
-
+    
     return candidates
