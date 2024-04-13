@@ -102,6 +102,20 @@ def main(argv=sys.argv[1:]):
                    default="HEAD",
                    nargs="?",
                    help="The object the new tag will point to")
+    
+    argsp = argsubparsers.add_parser(
+    "rev-parse",
+    help="Parse revision (or other objects) identifiers")
+
+    argsp.add_argument("--wyag-type",
+                   metavar="type",
+                   dest="type",
+                   choices=["blob", "commit", "tag", "tree"],
+                   default=None,
+                   help="Specify the expected type")
+
+    argsp.add_argument("name",
+                   help="The name to parse")
 
 
     args = argparser.parse_args(argv)
@@ -114,7 +128,18 @@ def main(argv=sys.argv[1:]):
         case "checkout": cmd_checkout(args)
         case "show-ref": cmd_show_ref(args)
         case "tag": cmd_tag(args)
+        case "rev-parse": cmd_rev_parse(args)
         case _              : print("Bad command.")
+
+def cmd_rev_parse(args):
+    if args.type:
+        fmt = args.type.encode()
+    else:
+        fmt = None
+
+    repo = repo_find()
+
+    print (object_find(repo, args.name, fmt, follow=True))
 
 
 def cmd_tag(args):
@@ -216,6 +241,7 @@ def ls_tree(repo, ref, recursive=None, prefix=""):
         else:
             type = item.mode[0:2]
         
+        print(type)
         match type: #this is per definition of the tree content https://wyag.thb.lt/#checkout
             case b'04': type = "tree"
             case b'10': type = "blob" # A regular file.
@@ -268,7 +294,7 @@ def cmd_cat_file(args):
     cat_file(repo, args.object, fmt=args.type.encode())
 
 
-def cat_file(repo, object, fmt):
+def cat_file(repo, object, fmt=None):
     obj = object_read(repo, object_find(repo, object, fmt=fmt))
     sys.stdout.buffer.write(obj.serialize())
 
@@ -750,5 +776,11 @@ def object_resolve(repo, name):
     if as_branch:
         candidates.append(as_branch)
 
+
+
+    # search for branches and tags (with or without "refs" and "heads" or "tags" prefixes)
+    for path in [f'refs/heads/{name}', f'refs/tags/{name}', f'refs/{name}', name]:
+        if os.path.exists(repo_file(repo, path)):
+            candidates.append(ref_resolve(repo, path))
 
     return candidates
