@@ -1020,8 +1020,8 @@ def kvlm_parse(raw, start=0, dct=None):
     end = start
     while True:
         end = raw.find(b'\n', end+1)
-        if raw[end+1] != ord(' '): break
-
+        char_after_nl_is_not_space = raw[end+1] != ord(' ')
+        if char_after_nl_is_not_space: break
 
     val = raw[space+1:end].replace(b'\n ', b'\n')
     if key in dct:
@@ -1045,7 +1045,7 @@ def kvlm_serialize(kvlm):
             val = [ val ]
 
         for v in val:
-            msg+= k + b' ' + (v.replace(b'\n', 'b\n ')) + b'\n'
+            msg+= k + b' ' + (v.replace(b'\n', b'\n ')) + b'\n'
 
 
     msg += b'\n' + kvlm[None] + b'\n' 
