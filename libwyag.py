@@ -652,7 +652,6 @@ def ls_tree(repo, ref, recursive=None, prefix=""):
         else:
             type = item.mode[0:2]
         
-        print(type)
         match type: #this is per definition of the tree content https://wyag.thb.lt/#checkout
             case b'04': type = "tree"
             case b'10': type = "blob" # A regular file.
@@ -749,7 +748,7 @@ def visualize_commits(repo, commit_sha, seen):
     seen.add(commit_sha)
 
     commit = object_read(repo, commit_sha)
-    message = commit.kvlm["message"].decode("utf8").strip()
+    message = commit.kvlm[None].decode("utf8").strip()
     message = message.replace("\\", "\\\\")
     message = message.replace("\"", "\\\"")
 
@@ -956,7 +955,6 @@ def object_read(repo, sha):
 
 def object_write(obj, repo=None):
     data = obj.serialize()
-
 #add header
     result = obj.fmt + b' ' + str(len(data)).encode() + b'\x00' + data
 
@@ -1013,7 +1011,7 @@ def kvlm_parse(raw, start=0, dct=None):
 
     noSpace = space == -1
     if noSpace or newline < space:
-        dct["message"] = raw[start+1:]  #the message
+        dct[None] = raw[start+1:]  #the message
         return dct
 
     key = raw[start:space]
@@ -1022,8 +1020,8 @@ def kvlm_parse(raw, start=0, dct=None):
     end = start
     while True:
         end = raw.find(b'\n', end+1)
-        char_after_nl_is_not_space = raw[end+1] != ord(' ')
-        if char_after_nl_is_not_space: break
+        if raw[end+1] != ord(' '): break
+
 
     val = raw[space+1:end].replace(b'\n ', b'\n')
     if key in dct:
@@ -1032,7 +1030,7 @@ def kvlm_parse(raw, start=0, dct=None):
         else:
             dct[key] = [ dct[key], val ]
     else:
-        dct[key]=[val]
+        dct[key]=val
 
     return kvlm_parse(raw, start=end+1, dct=dct)
 
@@ -1043,13 +1041,14 @@ def kvlm_serialize(kvlm):
     for k in kvlm.keys():
         if k==None: continue
         val = kvlm[k]
-
+        if type(val) != list:
+            val = [ val ]
 
         for v in val:
             msg+= k + b' ' + (v.replace(b'\n', 'b\n ')) + b'\n'
 
 
-    msg += b'\n' + kvlm["message"] + b'\n' 
+    msg += b'\n' + kvlm[None] + b'\n' 
         
     return msg
 
@@ -1069,7 +1068,7 @@ class GitTree(GitObject):
         self.items = tree_parse(data)
     
     def serialize(self):
-        tree_serialize(self)
+        return tree_serialize(self)
     
     def init(self):
         self.items = list()
@@ -1105,16 +1104,17 @@ def tree_parse(raw):
     return out
 
 
-def tree_serialize(tree):
-    sorted = tree.items.sort(key=tree_leaf_sort_key)
-
-    out = b''
-    for elem in sorted.items:
-        out+=elem.mode+b' '+elem.path.encode("utf8")+b'\x00'
-        sha = int(elem.sha, 16)
-        out+=sha.to_bytes(20,byteorder="big")
-
-    return out
+def tree_serialize(obj):
+    obj.items.sort(key=tree_leaf_sort_key)
+    ret = b''
+    for i in obj.items:
+        ret += i.mode
+        ret += b' '
+        ret += i.path.encode("utf8")
+        ret += b'\x00'
+        sha = int(i.sha, 16)
+        ret += sha.to_bytes(20, byteorder="big")
+    return ret
 
         
 
