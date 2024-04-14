@@ -142,6 +142,13 @@ def main(argv=sys.argv[1:]):
         case _              : print("Bad command.")
 
 
+def cmd_check_ignore(args):
+    repo = repo_find()
+    rules = gitignore_read(repo)
+    for path in args.path:
+        if check_ignore(rules, path):
+            print(path)
+
 def cmd_ls_files(args):
     repo=repo_find()
     index = index_read(repo) 
