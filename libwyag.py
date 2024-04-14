@@ -131,9 +131,17 @@ def main(argv=sys.argv[1:]):
     argsp = argsubparsers.add_parser("rm", help="Remove files from the working tree and the index.")
     argsp.add_argument("path", nargs="+", help="Files to remove")
 
-    def cmd_rm(args):
-        repo = repo_find()
-        rm(repo, args.path)   
+    argsp = argsubparsers.add_parser("add", help = "Add files contents to the index.")
+    argsp.add_argument("path", nargs="+", help="Files to add")
+    
+    argsp = argsubparsers.add_parser("commit", help="Record changes to the repository.")
+
+    argsp.add_argument("-m",
+                   metavar="message",
+                   dest="message",
+                   help="Message to associate with this commit.")
+
+
     args = argparser.parse_args(argv)
     match args.command:
         case "init"         : cmd_init(args)
@@ -149,12 +157,85 @@ def main(argv=sys.argv[1:]):
         case "check-ignore": cmd_check_ignore(args)
         case "status": cmd_status(args)
         case "rm": cmd_rm(args)
+        case "add": cmd_add(args)
+        case "commit": cmd_commit(args)
         case _              : print("Bad command.")
 
 
+def cmd_commit(args):
+    repo = repo_find()
+    index = index_read(repo)
+    # Create trees, grab back SHA for the root tree.
+    tree = tree_from_index(repo, index)
+
+    # Create the commit object itself
+    commit = commit_create(repo,
+                           tree,
+                           object_find(repo, "HEAD"),
+                           gitconfig_user_get(gitconfig_read()),
+                           datetime.now(),
+                           args.message)
+
+    # Update HEAD so our commit is now the tip of the active branch.
+    active_branch = branch_get_active(repo)
+    if active_branch: # If we're on a branch, we update refs/heads/BRANCH
+        with open(repo_file(repo, os.path.join("refs/heads", active_branch)), "w") as fd:
+            fd.write(commit + "\n")
+    else: # Otherwise, we update HEAD itself.
+        with open(repo_file(repo, "HEAD"), "w") as fd:
+            fd.write("\n")
+
+def cmd_add(args):
+  repo = repo_find()
+  add(repo, args.path)
+
 def cmd_rm(args):
     repo = repo_find()
-    rm(repo, args.path, args.delete, args.skip_missing)
+    rm(repo, args.path)
+
+
+#removes the existing index entry
+# hash the file into glob objet 
+# create the entry using stat and wirthe the modified index back
+def add(repo, paths, delete=True, skip_missing=False):
+
+  # First remove all paths from the index, if they exist.
+  rm (repo, paths, delete=False, skip_missing=True)
+
+  worktree = repo.worktree + os.sep
+
+  # Convert the paths to pairs: (absolute, relative_to_worktree).
+  # Also delete them from the index if they're present.
+  clean_paths = list()
+  for path in paths:
+    abspath = os.path.abspath(path)
+    if not (abspath.startswith(worktree) and os.path.isfile(abspath)):
+      raise Exception("Not a file, or outside the worktree: {}".format(paths))
+    relpath = os.path.relpath(abspath, repo.worktree)
+    clean_paths.append((abspath,  relpath))
+
+    index = index_read(repo)
+
+    for (abspath, relpath) in clean_paths:
+      with open(abspath, "rb") as fd:
+        sha = object_hash(fd, b"blob", repo)
+
+      stat = os.stat(abspath)
+
+      ctime_s = int(stat.st_ctime)
+      ctime_ns = stat.st_ctime_ns % 10**9
+      mtime_s = int(stat.st_mtime)
+      mtime_ns = stat.st_mtime_ns % 10**9
+
+      entry = GitIndexEntry(ctime=(ctime_s, ctime_ns), mtime=(mtime_s, mtime_ns), dev=stat.st_dev, ino=stat.st_ino,
+                            mode_type=0b1000, mode_perms=0o644, uid=stat.st_uid, gid=stat.st_gid,
+                            fsize=stat.st_size, sha=sha, flag_assume_valid=False,
+                            flag_stage=False, name=relpath)
+      index.entries.append(entry)
+
+    # Write the index back
+    index_write(repo, index)
+    
 
 #takes a list of paths and removes them from the index_file
 def rm(repo, paths, delete=True, skip_missing=False):
@@ -1315,3 +1396,104 @@ def index_write(repo, index):
                 pad = 8 - (idx % 8)
                 f.write((0).to_bytes(pad, "big"))
                 idx += pad
+def gitconfig_read():
+    xdg_config_home = os.environ["XDG_CONFIG_HOME"] if "XDG_CONFIG_HOME" in os.environ else "~/.config"
+    configfiles = [
+        os.path.expanduser(os.path.join(xdg_config_home, "git/config")),
+        os.path.expanduser("~/.gitconfig")
+    ]
+
+    config = configparser.ConfigParser()
+    config.read(configfiles)
+    return config
+
+
+def gitconfig_user_get(config):
+    if "user" in config:
+        if "name" in config["user"] and "email" in config["user"]:
+            return "{} <{}>".format(config["user"]["name"], config["user"]["email"])
+    return None
+
+def tree_from_index(repo, index):
+    contents = dict()
+    contents[""] = list()
+
+    # Enumerate entries, and turn them into a dictionary where keys
+    # are directories, and values are lists of directory contents.
+    for entry in index.entries:
+        dirname = os.path.dirname(entry.name)
+
+        # We create all dictonary entries up to root ("").  We need
+        # them *all*, because even if a directory holds no files it
+        # will contain at least a tree.
+        key = dirname
+        while key != "":
+            if not key in contents:
+                contents[key] = list()
+            key = os.path.dirname(key)
+
+        # For now, simply store the entry in the list.
+        contents[dirname].append(entry)
+
+    # Get keys (= directories) and sort them by length, descending.
+    # This means that we'll always encounter a given path before its
+    # parent, which is all we need, since for each directory D we'll
+    # need to modify its parent P to add D's tree.
+    sorted_paths = sorted(contents.keys(), key=len, reverse=True)
+
+    # This variable will store the current tree's SHA-1.  After we're
+    # done iterating over our dict, it will contain the hash for the
+    # root tree.
+    sha = None
+
+    # We ge through the sorted list of paths (dict keys)
+    for path in sorted_paths:
+        # Prepare a new, empty tree object
+        tree = GitTree()
+
+        # Add each entry to our new tree, in turn
+        for entry in contents[path]:
+            # An entry can be a normal GitIndexEntry read from the
+            # index, or a tree we've created.
+            if isinstance(entry, GitIndexEntry): # Regular entry (a file)
+
+                # We transcode the mode: the entry stores it as integers,
+                # we need an octal ASCII representation for the tree.
+                leaf_mode = "{:02o}{:04o}".format(entry.mode_type, entry.mode_perms).encode("ascii")
+                leaf = GitTreeLeaf(mode = leaf_mode, path=os.path.basename(entry.name), sha=entry.sha)
+            else: # Tree.  We've stored it as a pair: (basename, SHA)
+                leaf = GitTreeLeaf(mode = b"040000", path=entry[0], sha=entry[1])
+
+            tree.items.append(leaf)
+
+        # Write the new tree object to the store.
+        sha = object_write(tree, repo)
+
+        # Add the new tree hash to the current dictionary's parent, as
+        # a pair (basename, SHA)
+        parent = os.path.dirname(path)
+        base = os.path.basename(path) # The name without the path, eg main.go for src/main.go
+        contents[parent].append((base, sha))
+
+    return sha
+
+
+def commit_create(repo, tree, parent, author, timestamp, message):
+    commit = GitCommit() # Create the new commit object.
+    commit.kvlm[b"tree"] = tree.encode("ascii")
+    if parent:
+        commit.kvlm[b"parent"] = parent.encode("ascii")
+
+    # Format timezone
+    offset = int(timestamp.astimezone().utcoffset().total_seconds())
+    hours = offset // 3600
+    minutes = (offset % 3600) // 60
+    tz = "{}{:02}{:02}".format("+" if offset > 0 else "-", hours, minutes)
+
+    author = author + timestamp.strftime(" %s ") + tz
+
+    commit.kvlm[b"author"] = author.encode("utf8")
+    commit.kvlm[b"committer"] = author.encode("utf8")
+    commit.kvlm[None] = message.encode("utf8")
+
+    return object_write(commit, repo)
